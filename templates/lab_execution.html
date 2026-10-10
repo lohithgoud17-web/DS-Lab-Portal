@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+
+{% block title %}Lab Execution – DS LAB{% endblock %}
+
+{% block content %}
+<div class="container">
+  <!-- Section Intro -->
+  <div style="margin-bottom: 24px; text-align: left;">
+    <p style="color: var(--accent); font-weight: 700; text-transform: uppercase; font-size: 0.82rem; letter-spacing: 0.1em; margin-bottom: 6px;">
+      Practical Data Science
+    </p>
+    <h1 style="font-size: clamp(1.8rem, 3vw, 2.3rem); margin-bottom: 8px;">Laboratory Execution</h1>
+    <p style="color: var(--muted); font-size: 1.02rem; max-width: 740px;">
+      Document and explore student executed laboratory experiments, code implementations, model evaluation results, and repository links.
+    </p>
+  </div>
+
+  <!-- Search & Toolbar -->
+  <div class="toolbar">
+    <div class="search-box">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M10 2a8 8 0 015.293 13.707l5 5a1 1 0 01-1.414 1.414l-5-5A8 8 0 1110 2zm0 2a6 6 0 100 12 6 6 0 000-12z"/>
+      </svg>
+      <input type="search" id="experimentSearch" placeholder="Search experiments by number, title, or description..." aria-label="Search experiments">
+    </div>
+
+    <div class="toolbar__actions">
+      <span class="badge-counter" id="expCounter">{{ experiments|length }} Experiments</span>
+      <button type="button" class="btn btn--primary" id="openAddExpBtn">
+        + Add Experiment
+      </button>
+    </div>
+  </div>
+
+  <!-- Experiments Grid -->
+  <div class="experiments-grid" id="experimentsGrid">
+    {% for exp in experiments %}
+      <article class="exp-card" data-exp-id="{{ exp.id }}">
+        <!-- Cover Image & Badge -->
+        <div class="exp-card__cover">
+          <img src="{{ exp.cover_image or url_for('static', filename='images/exp1_cover.svg') }}" alt="Cover for Experiment {{ exp.experiment_no }}">
+          <span class="exp-card__badge">Exp {{ exp.experiment_no }}</span>
+        </div>
+
+        <!-- Body -->
+        <div class="exp-card__body">
+          <h2 class="exp-card__title">{{ exp.title }}</h2>
+          <p class="exp-card__desc">{{ exp.short_description }}</p>
+
+          <!-- Badges for code and output availability -->
+          <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px;">
+            {% if exp.code_file_name %}
+              <span class="sub-pill" style="background: #e0f2fe; color: #0369a1;">&#128196; {{ exp.code_file_name }}</span>
+            {% endif %}
+            {% if exp.output_image %}
+              <span class="sub-pill" style="background: #ecfdf5; color: #065f46;">&#128202; Output Plot</span>
+            {% endif %}
+          </div>
+
+          <!-- Sub-experiments badges if available -->
+          {% if exp.sub_experiments %}
+            <div class="exp-card__subs">
+              {% for sub in exp.sub_experiments %}
+                <span class="sub-pill">{{ exp.experiment_no }}{{ sub.letter }}: {{ sub.title }}</span>
+              {% endfor %}
+            </div>
+          {% endif %}
+
+          <!-- Actions -->
+          <div class="exp-card__actions">
+            <a href="{{ url_for('experiment_details_page', exp_id=exp.id) }}" class="btn btn--blue btn--sm">
+              View Execution &amp; Output &rarr;
+            </a>
+
+            <div style="display: flex; gap: 8px;">
+              {% if exp.github_url %}
+                <a href="{{ exp.github_url }}" target="_blank" rel="noopener noreferrer" class="btn btn--ghost btn--sm" title="View GitHub code">
+                  <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+                  Code
+                </a>
+              {% endif %}
+
+              <button type="button" class="btn btn--danger btn--sm" data-delete-exp="{{ exp.id }}" data-exp-title="Experiment {{ exp.experiment_no }} ({{ exp.title }})" title="Delete experiment">
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      </article>
+    {% else %}
+      <div style="grid-column: 1 / -1; padding: 48px 24px; text-align: center; background: var(--surface); border: 1px dashed var(--line); border-radius: var(--radius);">
+        <p style="font-size: 1.1rem; color: var(--muted); margin-bottom: 12px;">No experiments recorded yet.</p>
+        <button type="button" class="btn btn--primary" id="openAddExpEmptyBtn" onclick="document.getElementById('openAddExpBtn').click()">
+          + Add First Experiment
+        </button>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- Add Experiment Modal Form -->
+<div class="modal-overlay" id="experimentModal" role="dialog" aria-modal="true" aria-labelledby="addExpModalHeading">
+  <div class="modal-panel modal-panel--wide">
+    <div class="modal-header">
+      <h2 id="addExpModalHeading" style="font-size: 1.25rem;">+ Add Laboratory Experiment</h2>
+      <button type="button" class="modal-close" data-close-modal aria-label="Close modal">&times;</button>
+    </div>
+
+    <form id="experimentForm" novalidate>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="expNumber">Experiment Number *</label>
+          <input type="text" id="expNumber" name="number" maxlength="10" placeholder="e.g. 2" required>
+        </div>
+        <div class="form-group">
+          <label for="expName">Experiment Title *</label>
+          <input type="text" id="expName" name="name" maxlength="150" placeholder="e.g. Linear Regression & Gradient Descent" required>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="expShortDesc">Short Description (D1) *</label>
+        <textarea id="expShortDesc" name="description" rows="2" maxlength="300" placeholder="Brief summary displayed on the experiment card..." required></textarea>
+      </div>
+
+      <!-- Execution Files Upload: Code File & Output Image -->
+      <div class="form-row" style="background: var(--bg); padding: 14px; border-radius: 8px; border: 1px dashed var(--line); margin: 6px 0;">
+        <div class="form-group">
+          <label style="font-weight: 700; color: var(--accent-dark);">Executed Code File (.py, .ipynb, .txt)</label>
+          <input type="file" id="expCodeFileInput" name="code_file" accept=".py,.ipynb,.txt,.sql,.r" style="margin-top: 6px;">
+          <small style="color: var(--muted); font-size: 0.78rem;">Upload the Python script that you executed.</small>
+        </div>
+
+        <div class="form-group">
+          <label style="font-weight: 700; color: var(--accent-dark);">Execution Output Plot / Image</label>
+          <input type="file" id="expOutputImageInput" name="output_image_file" accept="image/*" style="margin-top: 6px;">
+          <small style="color: var(--muted); font-size: 0.78rem;">Upload output chart, graph, or plot image.</small>
+        </div>
+      </div>
+
+      <!-- Terminal Output Text -->
+      <div class="form-group">
+        <label for="expOutputText">Console Output / Execution Logs (Text)</label>
+        <textarea id="expOutputText" name="output_text" rows="3" placeholder="Paste execution terminal output or evaluation metrics..." style="font-family: ui-monospace, monospace; font-size: 0.88rem;"></textarea>
+      </div>
+
+      <!-- Optional Cover Image -->
+      <div class="form-group">
+        <label>Main Cover Image (optional, fallback if no output plot)</label>
+        <div style="display: flex; gap: 14px; align-items: center;">
+          <img id="expCoverPreview" src="" alt="Cover preview" style="width: 110px; height: 65px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line);" hidden>
+          <label class="btn btn--ghost btn--sm" for="expCoverInput" style="cursor: pointer;">
+            Choose Cover Image
+            <input type="file" id="expCoverInput" name="cover" accept="image/*" style="display: none;">
+          </label>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="expD2Heading">Custom Content Heading</label>
+        <input type="text" id="expD2Heading" name="d2Heading" placeholder="Default: Experiment Implementation Details" value="Experiment Implementation Details">
+      </div>
+
+      <div class="form-group">
+        <label for="expD2Content">Detailed Experiment Content / Notes</label>
+        <textarea id="expD2Content" name="d2Content" rows="4" placeholder="## Objective&#10;Describe laboratory objective...&#10;&#10;## Algorithm &amp; Steps&#10;1. Ingestion&#10;2. Feature Transformation&#10;3. Training"></textarea>
+      </div>
+
+      <div class="form-group">
+        <label for="expGithub">GitHub Repository Link (optional)</label>
+        <input type="url" id="expGithub" name="github" placeholder="https://github.com/username/project/tree/main/exp2">
+      </div>
+
+      <!-- Sub-experiments section -->
+      <div style="border-top: 1px solid var(--line); padding-top: 14px; margin-top: 4px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <span style="font-weight: 600; font-size: 0.9rem;">Sub-Experiments (Optional)</span>
+          <button type="button" class="btn btn--ghost btn--sm" id="addSubExpBtn">+ Add Sub-Experiment</button>
+        </div>
+        <div id="subExperimentsContainer"></div>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="btn btn--ghost" data-close-modal>Cancel</button>
+        <button type="submit" class="btn btn--primary">Save Experiment</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

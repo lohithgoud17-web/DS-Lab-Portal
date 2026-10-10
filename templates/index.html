@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+
+{% block title %}Home – Data Science Digital Laboratory{% endblock %}
+
+{% block content %}
+<div class="container">
+  <!-- Hero & Student Profile Section -->
+  <div class="home-hero-wrap">
+    <!-- Intro Text -->
+    <section class="home-intro">
+      <p class="home-intro__eyebrow">Learn &middot; Explore &middot; Apply</p>
+      <h1 class="home-intro__title">DATA SCIENCE<br><span style="font-weight: 600; color: var(--accent);">Digital Laboratory</span></h1>
+      <p class="home-intro__lead">
+        A structured academic portal to master data science concepts through curriculum modules, executed laboratory experiments, code implementations, and certified PDF resources.
+      </p>
+      <div style="display: flex; gap: 12px; margin-top: 24px; flex-wrap: wrap;">
+        <a href="{{ url_for('modules_page') }}" class="btn btn--blue">
+          Explore Modules &rarr;
+        </a>
+        <a href="{{ url_for('lab_execution_page') }}" class="btn btn--ghost">
+          Lab Execution &rarr;
+        </a>
+      </div>
+    </section>
+
+    <!-- Student Profile / ID Card -->
+    <aside class="id-card" id="homeIdCard" aria-label="Student profile identification card">
+      <div class="id-card__strip"></div>
+      <div class="id-card__header">
+        <span class="id-card__label">Student Profile</span>
+        <button type="button" class="id-card__edit-btn" data-open-profile title="Edit ID card details">
+          &#9998; Edit Profile
+        </button>
+      </div>
+
+      <div class="id-card__body">
+        <img class="id-card__photo" id="homeIdPhoto" src="{{ current_student.photo_url or url_for('static', filename='images/default_student.svg') }}" alt="Student Photo">
+        <dl class="id-card__details">
+          <div class="id-card__row">
+            <dt>Name</dt>
+            <dd id="homeIdName">{{ current_student.name or 'Not added' }}</dd>
+          </div>
+          <div class="id-card__row">
+            <dt>Register No</dt>
+            <dd id="homeIdRoll">{{ current_student.register_no or 'Not added' }}</dd>
+          </div>
+          <div class="id-card__row">
+            <dt>Section</dt>
+            <dd id="homeIdSection">{{ current_student.section or 'Not added' }}</dd>
+          </div>
+          <div class="id-card__row">
+            <dt>Branch</dt>
+            <dd id="homeIdBranch">{{ current_student.branch or 'Not added' }}</dd>
+          </div>
+          <div class="id-card__row">
+            <dt>Faculty</dt>
+            <dd id="homeIdFaculty">{{ current_student.faculty_name or 'Not added' }}</dd>
+          </div>
+          <div class="id-card__row">
+            <dt>GitHub Repo</dt>
+            <dd id="homeIdGithub">
+              {% if current_student.github_url %}
+                <a href="{{ current_student.github_url }}" target="_blank" rel="noopener noreferrer" class="id-card__link">
+                  View Repository &rarr;
+                </a>
+              {% else %}
+                Not added
+              {% endif %}
+            </dd>
+          </div>
+        </dl>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Explore the Laboratory Section -->
+  <section aria-label="Explore the laboratory" style="margin-bottom: 40px;">
+    <div class="section-head">
+      <h2 class="section-title">Explore the Laboratory</h2>
+    </div>
+
+    <div class="home-sections">
+      <!-- 01 Modules -->
+      <article class="home-card">
+        <span class="home-card__number">01</span>
+        <div class="home-card__body">
+          <h3>Modules</h3>
+          <p>Structured academic learning modules from Data Science fundamentals and Python tools to Machine Learning and Deep Learning with downloadable study notes.</p>
+          <a class="home-card__link" href="{{ url_for('modules_page') }}">
+            Explore Modules &rarr;
+          </a>
+        </div>
+      </article>
+
+      <!-- 02 Lab Execution -->
+      <article class="home-card">
+        <span class="home-card__number">02</span>
+        <div class="home-card__body">
+          <h3>Lab Execution</h3>
+          <p>Explore practical executed experiments, code implementations, step-by-step methodologies, statistical conclusions, and GitHub repository links.</p>
+          <a class="home-card__link" href="{{ url_for('lab_execution_page') }}">
+            View Experiments &rarr;
+          </a>
+        </div>
+      </article>
+
+      <!-- 03 Tools -->
+      <article class="home-card">
+        <span class="home-card__number">03</span>
+        <div class="home-card__body">
+          <h3>Tools &amp; Libraries</h3>
+          <p>NumPy, Pandas, Matplotlib, Seaborn, Scikit-Learn, Jupyter Notebook, and Git environments commonly used in Data Science workflows.</p>
+          <a class="home-card__link" href="{{ url_for('modules_page') }}">
+            Learn Tools &rarr;
+          </a>
+        </div>
+      </article>
+
+      <!-- 04 Resources -->
+      <article class="home-card">
+        <span class="home-card__number">04</span>
+        <div class="home-card__body">
+          <h3>PDF Resources</h3>
+          <p>Curated syllabus reference manuals, lecture handouts, and official documentation available for immediate reading or download.</p>
+          <a class="home-card__link" href="{{ url_for('modules_page') }}">
+            Browse PDFs &rarr;
+          </a>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- Laboratory Overview Stats -->
+  <section class="home-overview" aria-labelledby="overviewTitle">
+    <h2 id="overviewTitle">Laboratory Overview</h2>
+    <div class="home-overview__stats">
+      <article class="home-overview__stat">
+        <strong>{{ stats.modules }}</strong>
+        <span>Learning Modules</span>
+      </article>
+      <article class="home-overview__stat">
+        <strong>{{ stats.experiments }}</strong>
+        <span>Executed Experiments</span>
+      </article>
+      <article class="home-overview__stat">
+        <strong>{{ stats.tools }}</strong>
+        <span>Core Tools &amp; Libs</span>
+      </article>
+      <article class="home-overview__stat">
+        <strong>{{ stats.resources }}</strong>
+        <span>Verified PDF Manuals</span>
+      </article>
+    </div>
+  </section>
+</div>
+{% endblock %}

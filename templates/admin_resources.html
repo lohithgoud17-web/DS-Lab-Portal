@@ -1,0 +1,303 @@
+{% extends "base.html" %}
+
+{% block title %}Resource Management – DS LAB Admin{% endblock %}
+
+{% block content %}
+<div class="container">
+  <!-- Admin Header -->
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 14px;">
+    <div>
+      <p style="color: var(--accent); font-weight: 700; text-transform: uppercase; font-size: 0.82rem; letter-spacing: 0.1em; margin-bottom: 4px;">
+        Administrator Console
+      </p>
+      <h1 style="font-size: clamp(1.8rem, 3vw, 2.2rem);">Curriculum &amp; PDF Management</h1>
+    </div>
+
+    <div style="display: flex; gap: 10px; align-items: center;">
+      <a href="{{ url_for('modules_page') }}" class="btn btn--ghost btn--sm">
+        View Student Modules Page &rarr;
+      </a>
+      <a href="{{ url_for('admin_logout') }}" class="btn btn--danger btn--sm">
+        Sign Out
+      </a>
+    </div>
+  </div>
+
+  <!-- Flash Messages -->
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div style="padding: 10px 16px; border-radius: 8px; margin-bottom: 20px; font-size: 0.92rem; background: var(--success-soft); color: var(--success); border: 1px solid #a7f3d0;">
+          {{ message }}
+        </div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <!-- Module Selector Pills -->
+  <div style="display: flex; gap: 8px; margin-bottom: 24px; overflow-x: auto; padding-bottom: 6px;">
+    {% for mod in modules %}
+      <button type="button" class="btn btn--sm admin-mod-tab {% if loop.first %}btn--primary{% else %}btn--ghost{% endif %}" data-target-mod="{{ mod.id }}">
+        {{ mod.module_number }}
+      </button>
+    {% endfor %}
+  </div>
+
+  <!-- Module Content Panels -->
+  {% for mod in modules %}
+    <div class="admin-mod-panel" id="adminModPanel{{ mod.id }}" style="{% if not loop.first %}display: none;{% endif %}">
+      <!-- Edit Module Title / Description Form -->
+      <div class="admin-card" style="margin-bottom: 24px;">
+        <h2 style="font-size: 1.15rem; margin-bottom: 14px; color: var(--ink);">
+          Edit {{ mod.module_number }} Information
+        </h2>
+        <form class="admin-edit-mod-form" data-module-id="{{ mod.id }}">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Module Number</label>
+              <input type="text" name="module_number" value="{{ mod.module_number }}" required>
+            </div>
+            <div class="form-group">
+              <label>Module Title</label>
+              <input type="text" name="title" value="{{ mod.title }}" required>
+            </div>
+          </div>
+          <div class="form-group" style="margin-top: 10px;">
+            <label>Module Description</label>
+            <textarea name="description" rows="2">{{ mod.description }}</textarea>
+          </div>
+          <div style="margin-top: 12px; display: flex; justify-content: flex-end;">
+            <button type="submit" class="btn btn--primary btn--sm">Update Module Info</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Subtopics and PDF Management -->
+      <div class="admin-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; border-bottom: 1px solid var(--line-light); padding-bottom: 12px;">
+          <div>
+            <h2 style="font-size: 1.2rem;">Subtopics &amp; PDF Learning Resources</h2>
+            <p style="font-size: 0.85rem; color: var(--muted);">Upload official PDF manuals or handouts for each subtopic.</p>
+          </div>
+          <button type="button" class="btn btn--blue btn--sm" onclick="openAddSubtopicModal({{ mod.id }}, '{{ mod.module_number }}')">
+            + Add Subtopic
+          </button>
+        </div>
+
+        <div class="admin-subtopics-list">
+          {% for sub in mod.subtopics %}
+            <div class="admin-subtopic-row">
+              <div style="flex: 1; min-width: 260px;">
+                <div style="display: flex; align-items: baseline; gap: 8px;">
+                  <strong style="color: var(--ink); font-size: 0.98rem;">{{ loop.index }}. {{ sub.title }}</strong>
+                </div>
+                <p style="font-size: 0.84rem; color: var(--muted); margin-top: 2px;">{{ sub.description }}</p>
+
+                <!-- Current PDF Status -->
+                <div style="margin-top: 8px; font-size: 0.84rem;">
+                  {% if sub.pdf_id %}
+                    <span style="color: var(--success); font-weight: 600;">&#10003; PDF Active:</span>
+                    <span style="color: var(--ink);">{{ sub.file_name }}</span>
+                    <a href="{{ url_for('pdf_viewer_page', resource_id=sub.pdf_id) }}" target="_blank" style="margin-left: 10px; font-weight: 600;">[Preview]</a>
+                    <a href="{{ url_for('api_pdf_download', resource_id=sub.pdf_id) }}" style="margin-left: 6px; font-weight: 600;">[Download]</a>
+                  {% else %}
+                    <span style="color: #b45309; font-weight: 600;">&bull; No PDF uploaded</span>
+                  {% endif %}
+                </div>
+              </div>
+
+              <!-- Upload / Replace PDF Action -->
+              <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                <form class="upload-pdf-form" data-subtopic-id="{{ sub.id }}" style="display: flex; align-items: center; gap: 6px;">
+                  <input type="file" name="pdf_file" accept=".pdf,application/pdf" required style="font-size: 0.82rem; max-width: 190px;">
+                  <button type="submit" class="btn btn--ghost btn--sm">
+                    {% if sub.pdf_id %}Replace PDF{% else %}Upload PDF{% endif %}
+                  </button>
+                </form>
+
+                {% if sub.pdf_id %}
+                  <button type="button" class="btn btn--danger btn--sm" onclick="deletePdfResource({{ sub.pdf_id }}, '{{ sub.title }}')">
+                    Delete PDF
+                  </button>
+                {% endif %}
+
+                <button type="button" class="btn btn--ghost btn--sm" style="color: var(--danger);" onclick="deleteSubtopic({{ sub.id }}, '{{ sub.title }}')">
+                  &times;
+                </button>
+              </div>
+            </div>
+          {% else %}
+            <p style="color: var(--muted); padding: 16px 0; font-size: 0.9rem;">No subtopics registered for this module yet.</p>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+</div>
+
+<!-- Add Subtopic Modal -->
+<div class="modal-overlay" id="addSubtopicModal">
+  <div class="modal-panel">
+    <div class="modal-header">
+      <h2 style="font-size: 1.2rem;">+ Add Subtopic to <span id="targetModLabel"></span></h2>
+      <button type="button" class="modal-close" data-close-modal>&times;</button>
+    </div>
+
+    <form id="addSubtopicForm">
+      <input type="hidden" id="targetModId" name="module_id">
+      <div class="form-group">
+        <label>Subtopic Title *</label>
+        <input type="text" id="subtopicTitle" name="title" placeholder="e.g. Exploratory Data Analysis" required>
+      </div>
+
+      <div class="form-group">
+        <label>Short Description</label>
+        <textarea id="subtopicDesc" name="description" rows="3" placeholder="Brief outline of concepts..."></textarea>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="btn btn--ghost" data-close-modal>Cancel</button>
+        <button type="submit" class="btn btn--primary">Save Subtopic</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  // Tab Switching
+  document.querySelectorAll('.admin-mod-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.admin-mod-tab').forEach(t => {
+        t.classList.remove('btn--primary');
+        t.classList.add('btn--ghost');
+      });
+      tab.classList.add('btn--primary');
+      tab.classList.remove('btn--ghost');
+
+      const targetId = tab.getAttribute('data-target-mod');
+      document.querySelectorAll('.admin-mod-panel').forEach(p => p.style.display = 'none');
+      const panel = document.getElementById('adminModPanel' + targetId);
+      if (panel) panel.style.display = 'block';
+    });
+  });
+
+  // Edit Module Info
+  document.querySelectorAll('.admin-edit-mod-form').forEach(form => {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const modId = form.getAttribute('data-module-id');
+      const formData = new FormData(form);
+      const payload = {
+        id: modId,
+        module_number: formData.get('module_number'),
+        title: formData.get('title'),
+        description: formData.get('description')
+      };
+
+      try {
+        const res = await fetch('/api/admin/modules', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) throw new Error('Could not update module.');
+        showToast('Module info updated.');
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    });
+  });
+
+  // Add Subtopic
+  function openAddSubtopicModal(modId, modLabel) {
+    document.getElementById('targetModId').value = modId;
+    document.getElementById('targetModLabel').textContent = modLabel;
+    document.getElementById('subtopicTitle').value = '';
+    document.getElementById('subtopicDesc').value = '';
+    openModal(document.getElementById('addSubtopicModal'));
+  }
+
+  document.getElementById('addSubtopicForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const payload = {
+      module_id: document.getElementById('targetModId').value,
+      title: document.getElementById('subtopicTitle').value,
+      description: document.getElementById('subtopicDesc').value
+    };
+
+    try {
+      const res = await fetch('/api/admin/subtopics', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error('Failed to create subtopic.');
+      showToast('Subtopic created!');
+      setTimeout(() => location.reload(), 400);
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  });
+
+  // Upload / Replace PDF
+  document.querySelectorAll('.upload-pdf-form').forEach(form => {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const subId = form.getAttribute('data-subtopic-id');
+      const fileInput = form.querySelector('input[type="file"]');
+      if (!fileInput.files[0]) return;
+
+      const fd = new FormData();
+      fd.append('subtopic_id', subId);
+      fd.append('pdf_file', fileInput.files[0]);
+
+      const submitBtn = form.querySelector('button[type="submit"]');
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Uploading...';
+
+      try {
+        const res = await fetch('/api/admin/upload-pdf', {
+          method: 'POST',
+          body: fd
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          throw new Error(d.error || 'Failed to upload PDF.');
+        }
+        showToast('PDF uploaded successfully!');
+        setTimeout(() => location.reload(), 400);
+      } catch (err) {
+        showToast(err.message, true);
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Upload PDF';
+      }
+    });
+  });
+
+  // Delete PDF
+  async function deletePdfResource(pdfId, topicTitle) {
+    if (!confirm(`Are you sure you want to delete the PDF resource for "${topicTitle}"?`)) return;
+    try {
+      const res = await fetch(`/api/admin/pdf/${pdfId}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Could not delete PDF.');
+      showToast('PDF deleted.');
+      setTimeout(() => location.reload(), 400);
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
+  // Delete Subtopic
+  async function deleteSubtopic(subId, topicTitle) {
+    if (!confirm(`Delete subtopic "${topicTitle}" and its PDF?`)) return;
+    try {
+      const res = await fetch(`/api/admin/subtopics/${subId}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Could not delete subtopic.');
+      showToast('Subtopic deleted.');
+      setTimeout(() => location.reload(), 400);
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+</script>
+{% endblock %}

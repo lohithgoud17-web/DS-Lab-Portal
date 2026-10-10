@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block title %}Administrator Login – DS LAB{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width: 480px; margin-top: 40px; margin-bottom: 60px;">
+  <div style="background: var(--surface); border: 1px solid var(--line); border-top: 4px solid var(--accent); border-radius: var(--radius); padding: 32px; box-shadow: var(--shadow);">
+    <div style="text-align: center; margin-bottom: 24px;">
+      <h1 style="font-size: 1.5rem; margin-bottom: 6px;">Administrator Portal</h1>
+      <p style="color: var(--muted); font-size: 0.9rem;">Sign in to upload PDFs, edit syllabus modules, and manage learning resources.</p>
+    </div>
+
+    <!-- Flash Messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div style="padding: 10px 14px; border-radius: 8px; margin-bottom: 16px; font-size: 0.9rem; {% if category == 'error' %}background: var(--danger-soft); color: var(--danger); border: 1px solid #fbd6d2;{% else %}background: var(--success-soft); color: var(--success); border: 1px solid #a7f3d0;{% endif %}">
+            {{ message }}
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <form method="POST" action="{{ url_for('admin_login') }}">
+      <div class="form-group" style="margin-bottom: 16px;">
+        <label for="adminUsername">Username</label>
+        <input type="text" id="adminUsername" name="username" placeholder="e.g. admin" required autofocus>
+      </div>
+
+      <div class="form-group" style="margin-bottom: 20px;">
+        <label for="adminPassword">Password</label>
+        <input type="password" id="adminPassword" name="password" placeholder="••••••••" required>
+      </div>
+
+      <button type="submit" class="btn btn--primary" style="width: 100%;">
+        Sign In as Administrator &rarr;
+      </button>
+
+      <div style="margin-top: 20px; text-align: center; font-size: 0.84rem; color: var(--muted); border-top: 1px solid var(--line-light); padding-top: 14px;">
+        Default credentials for development: <code>admin</code> / <code>admin123</code>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

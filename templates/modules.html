@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+
+{% block title %}Modules – DS LAB{% endblock %}
+
+{% block content %}
+<div class="container">
+  <!-- Page Header -->
+  <div style="margin-bottom: 24px; text-align: left;">
+    <p style="color: var(--accent); font-weight: 700; text-transform: uppercase; font-size: 0.82rem; letter-spacing: 0.1em; margin-bottom: 6px;">
+      Curriculum &amp; Learning Pathway
+    </p>
+    <h1 style="font-size: clamp(1.8rem, 3vw, 2.3rem); margin-bottom: 8px;">Data Science Modules</h1>
+    <p style="color: var(--muted); font-size: 1.02rem; max-width: 740px;">
+      Access structured syllabus modules covering core theory, algorithmic foundations, code demonstrations, and downloadable PDF laboratory manuals.
+    </p>
+  </div>
+
+  <!-- Dynamic Search & Filter Toolbar with Add Topic Button -->
+  <div class="toolbar">
+    <div class="search-box">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M10 2a8 8 0 015.293 13.707l5 5a1 1 0 01-1.414 1.414l-5-5A8 8 0 1110 2zm0 2a6 6 0 100 12 6 6 0 000-12z"/>
+      </svg>
+      <input type="search" id="moduleSearch" placeholder="Search by module title, number, or subtopic name..." aria-label="Search modules and subtopics">
+    </div>
+
+    <div class="toolbar__actions">
+      <span class="badge-counter">{{ modules|length }} Modules Available</span>
+      
+      <!-- Primary Add Topic & PDF button as requested -->
+      <button type="button" class="btn btn--primary" id="openAddTopicBtn" title="Add a new topic with title and PDF file">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+          <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+        </svg>
+        + Add Topic &amp; PDF
+      </button>
+    </div>
+  </div>
+
+  <!-- Modules List (Accordion & Expandable Sections) -->
+  <div class="modules-list" id="modulesContainer">
+    {% for mod in modules %}
+      <article class="module-card {% if loop.first %}is-expanded{% endif %}" data-module-id="{{ mod.id }}">
+        <!-- Header (Click to Expand / Collapse) -->
+        <div class="module-card__header" role="button" tabindex="0" aria-expanded="{% if loop.first %}true{% else %}false{% endif %}">
+          <div class="module-card__info">
+            <span class="module-card__tag">{{ mod.module_number }}</span>
+            <h2 class="module-card__title">{{ mod.title }}</h2>
+            <p class="module-card__desc">{{ mod.description }}</p>
+          </div>
+          <div class="module-card__toggle">
+            <!-- Add Topic to this specific module button -->
+            <button type="button" class="btn btn--ghost btn--sm add-topic-to-mod" data-mod-id="{{ mod.id }}" data-mod-number="{{ mod.module_number }}" onclick="event.stopPropagation(); openAddTopicForModule({{ mod.id }}, '{{ mod.module_number }}');" title="Add new topic to this module">
+              + Add Topic
+            </button>
+            <a href="{{ url_for('module_details_page', module_id=mod.id) }}" class="btn btn--ghost btn--sm" style="margin-right: 6px;" onclick="event.stopPropagation();" title="View dedicated module page">
+              Syllabus Page &rarr;
+            </a>
+            <div class="toggle-arrow" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- Subtopics & PDF Resources Section -->
+        <div class="module-card__subtopics">
+          <div class="subtopics-table" id="subtopicsTable{{ mod.id }}">
+            {% for sub in mod.subtopics %}
+              <div class="subtopic-item">
+                <div class="subtopic-item__content">
+                  <span class="subtopic-item__title">
+                    <span style="color: var(--accent); font-weight: 700; margin-right: 6px;">{{ loop.index }}.</span>
+                    {{ sub.title }}
+                  </span>
+                  {% if sub.description %}
+                    <span class="subtopic-item__desc">{{ sub.description }}</span>
+                  {% endif %}
+
+                  {% if sub.pdf_id %}
+                    <div class="subtopic-item__pdf-meta">
+                      <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm-1 2l5 5h-5V4zm-7 16V4h5v6h6v10H6z"/></svg>
+                      <span>File: <strong>{{ sub.pdf_file_name }}</strong></span>
+                    </div>
+                  {% endif %}
+                </div>
+
+                <!-- PDF Action Buttons -->
+                <div class="subtopic-item__actions">
+                  {% if sub.pdf_id %}
+                    <!-- Read PDF Button: Opens embedded reader -->
+                    <a href="{{ url_for('pdf_viewer_page', resource_id=sub.pdf_id) }}" class="btn btn--blue btn--sm" title="Read PDF inside laboratory viewer">
+                      <svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+                      Read PDF
+                    </a>
+
+                    <!-- Download PDF Button: Direct file download -->
+                    <a href="{{ url_for('api_pdf_download', resource_id=sub.pdf_id) }}" class="btn btn--ghost btn--sm" title="Download PDF to device">
+                      <svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                      Download PDF
+                    </a>
+                  {% else %}
+                    <!-- Clear status when PDF is not available yet -->
+                    <span class="badge-no-pdf">
+                      PDF not uploaded yet
+                    </span>
+                  {% endif %}
+                </div>
+              </div>
+            {% else %}
+              <p style="color: var(--muted); font-size: 0.9rem; padding: 10px 0;">No subtopics added yet for this module. Click "+ Add Topic" above to add one.</p>
+            {% endfor %}
+          </div>
+        </div>
+      </article>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- Modal: Add New Topic & Upload PDF -->
+<div class="modal-overlay" id="addTopicModal" role="dialog" aria-modal="true" aria-labelledby="addTopicModalHeading">
+  <div class="modal-panel">
+    <div class="modal-header">
+      <h2 id="addTopicModalHeading" style="font-size: 1.25rem;">+ Add New Topic &amp; PDF Resource</h2>
+      <button type="button" class="modal-close" data-close-modal aria-label="Close modal">&times;</button>
+    </div>
+
+    <form id="addTopicForm" novalidate>
+      <div class="form-group">
+        <label for="topicModuleSelect">Target Module *</label>
+        <select id="topicModuleSelect" name="module_id" required>
+          {% for mod in modules %}
+            <option value="{{ mod.id }}">{{ mod.module_number }}: {{ mod.title }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="topicTitle">Topic Title *</label>
+        <input type="text" id="topicTitle" name="title" placeholder="e.g. Data Wrangling &amp; Feature Pipelines" maxlength="150" required>
+      </div>
+
+      <div class="form-group">
+        <label for="topicDesc">Short Description (optional)</label>
+        <textarea id="topicDesc" name="description" rows="2" placeholder="Brief outline of concepts covered..." maxlength="300"></textarea>
+      </div>
+
+      <div class="form-group">
+        <label for="topicPdf">Upload PDF File (optional or recommended)</label>
+        <input type="file" id="topicPdf" name="pdf_file" accept=".pdf,application/pdf">
+        <small style="color: var(--muted); font-size: 0.8rem; margin-top: 3px;">Select official lecture notes or laboratory manual in .pdf format.</small>
+      </div>
+
+      <div class="form-actions">
+        <button type="button" class="btn btn--ghost" data-close-modal>Cancel</button>
+        <button type="submit" class="btn btn--primary" id="saveTopicBtn">Upload &amp; Save Topic</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
