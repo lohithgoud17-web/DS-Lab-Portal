@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}Reading: {{ resource.subtopic_title }} – DS LAB{% endblock %}
+
+{% block content %}
+<div class="container" style="padding-top: 16px; padding-bottom: 20px;">
+  <!-- Dedicated PDF Viewer Card -->
+  <div class="viewer-container">
+    <!-- Viewer Top Toolbar -->
+    <div class="viewer-toolbar">
+      <div style="display: flex; align-items: center; gap: 14px;">
+        <a href="{{ url_for('modules_page') }}" class="btn btn--ghost btn--sm" title="Back to modules">
+          &larr; Back to Modules
+        </a>
+        <div class="viewer-meta">
+          <span class="viewer-title">{{ resource.subtopic_title }}</span>
+          <span class="viewer-subtitle">{{ resource.module_number }}: {{ resource.module_title }} &middot; {{ resource.file_name }}</span>
+        </div>
+      </div>
+
+      <!-- Action Buttons: Open in Tab & Download -->
+      <div class="viewer-actions">
+        <!-- Open in New Tab -->
+        <a href="{{ url_for('api_pdf_read', resource_id=resource.id) }}" target="_blank" rel="noopener noreferrer" class="btn btn--ghost btn--sm" title="Open PDF in a new browser window/tab">
+          <svg viewBox="0 0 24 24"><path d="M19 19H5V5h7V3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
+          Open in New Tab
+        </a>
+
+        <!-- Download PDF -->
+        <a href="{{ url_for('api_pdf_download', resource_id=resource.id) }}" class="btn btn--blue btn--sm" title="Download this PDF to your computer">
+          <svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+          Download PDF
+        </a>
+      </div>
+    </div>
+
+    <!-- Embedded PDF Container -->
+    <iframe 
+      id="pdfFrame"
+      src="{{ url_for('api_pdf_read', resource_id=resource.id) }}#toolbar=1&navpanes=1&scrollbar=1" 
+      class="viewer-frame"
+      type="application/pdf"
+      title="PDF Document: {{ resource.subtopic_title }}"
+    >
+      <p style="padding: 30px; text-align: center; color: var(--muted);">
+        Your browser does not support embedded PDF viewing. 
+        <a href="{{ url_for('api_pdf_download', resource_id=resource.id) }}" class="btn btn--primary">
+          Click here to Download the PDF
+        </a>
+      </p>
+    </iframe>
+  </div>
+</div>
+{% endblock %}

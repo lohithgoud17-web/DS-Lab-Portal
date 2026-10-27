@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 450" width="800" height="450">
+  <defs>
+    <linearGradient id="coverBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#1e293b" />
+    </linearGradient>
+    <linearGradient id="chartGrad" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#0d7c86" />
+      <stop offset="100%" stop-color="#38bdf8" />
+    </linearGradient>
+  </defs>
+  <rect width="800" height="450" fill="url(#coverBg)" />
+  <!-- Grid lines -->
+  <line x1="80" y1="360" x2="720" y2="360" stroke="#334155" stroke-width="2" />
+  <line x1="80" y1="280" x2="720" y2="280" stroke="#334155" stroke-width="1" stroke-dasharray="4,4" />
+  <line x1="80" y1="200" x2="720" y2="200" stroke="#334155" stroke-width="1" stroke-dasharray="4,4" />
+  <line x1="80" y1="120" x2="720" y2="120" stroke="#334155" stroke-width="1" stroke-dasharray="4,4" />
+  
+  <!-- Bars -->
+  <rect x="120" y="240" width="60" height="120" rx="6" fill="url(#chartGrad)" opacity="0.8" />
+  <rect x="220" y="180" width="60" height="180" rx="6" fill="url(#chartGrad)" opacity="0.85" />
+  <rect x="320" y="140" width="60" height="220" rx="6" fill="url(#chartGrad)" opacity="0.9" />
+  <rect x="420" y="210" width="60" height="150" rx="6" fill="url(#chartGrad)" opacity="0.85" />
+  <rect x="520" y="110" width="60" height="250" rx="6" fill="url(#chartGrad)" />
+  <rect x="620" y="160" width="60" height="200" rx="6" fill="url(#chartGrad)" opacity="0.85" />
+
+  <!-- Trend line -->
+  <path d="M 150 240 Q 250 160, 350 140 T 550 110 T 650 160" fill="none" stroke="#f59e0b" stroke-width="4" />
+  <circle cx="150" cy="240" r="6" fill="#f59e0b" />
+  <circle cx="250" cy="180" r="6" fill="#f59e0b" />
+  <circle cx="350" cy="140" r="6" fill="#f59e0b" />
+  <circle cx="450" cy="210" r="6" fill="#f59e0b" />
+  <circle cx="550" cy="110" r="6" fill="#f59e0b" />
+  <circle cx="650" cy="160" r="6" fill="#f59e0b" />
+
+  <text x="80" y="70" font-family="Segoe UI, sans-serif" font-size="28" font-weight="bold" fill="#ffffff">California Housing Price Analysis</text>
+  <text x="80" y="100" font-family="Segoe UI, sans-serif" font-size="16" fill="#94a3b8">Exploratory Data Analysis &amp; Feature Correlation Matrix</text>
+</svg>
