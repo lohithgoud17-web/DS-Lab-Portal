@@ -69,8 +69,8 @@ A complete, responsive **Data Science Laboratory Portal** featuring two primary 
 
 * **Frontend**: HTML5, CSS3 (CSS Custom Properties, Responsive Grid & Flexbox, Sora & IBM Plex Sans typography), JavaScript (ES6+ AJAX & Dynamic DOM).
 * **Backend**: Python Flask 3.x, Gunicorn (WSGI).
-* **Database**: MySQL (PyMySQL) with automatic SQLite fallback (`ds_lab.db`) when MySQL is inactive.
-* **File Storage**: Organized file structure under `uploads/modules/module_1` to `module_5`, `uploads/experiments`, and `uploads/students`.
+* **Database**: PostgreSQL via `DATABASE_URL` with Neon-ready SSL settings; local SQLite is kept only for development/test fallback when no production database is configured.
+* **File Storage**: Cloudinary-backed uploads for production deployments, with a local `uploads/` fallback for development when cloud credentials are not set.
 
 ---
 

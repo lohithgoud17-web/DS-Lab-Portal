@@ -1,5 +1,6 @@
 import os
 import mimetypes
+import uuid
 from functools import wraps
 from flask import (
     Flask, render_template, request, jsonify, redirect, url_for,
@@ -8,6 +9,14 @@ from flask import (
 from werkzeug.utils import secure_filename
 from werkzeug.security import check_password_hash, generate_password_hash
 from dotenv import load_dotenv
+
+try:
+    import cloudinary
+    from cloudinary import uploader
+except ImportError:  # pragma: no cover
+    cloudinary = None
+    uploader = None
+
 from database import query_db, init_db
 
 # Load environment
@@ -29,6 +38,54 @@ ALLOWED_EXTENSIONS_PDF = {'pdf'}
 ALLOWED_EXTENSIONS_IMG = {'png', 'jpg', 'jpeg', 'webp', 'svg'}
 ALLOWED_EXTENSIONS_VID = {'mp4', 'webm', 'ogg', 'mov'}
 ALLOWED_EXTENSIONS_CODE = {'py', 'ipynb', 'txt', 'sql', 'r', 'java', 'c', 'cpp', 'js', 'json', 'csv'}
+
+
+def storage_is_configured():
+    cloud_name = os.getenv('CLOUDINARY_CLOUD_NAME')
+    api_key = os.getenv('CLOUDINARY_API_KEY')
+    api_secret = os.getenv('CLOUDINARY_API_SECRET')
+    return bool(cloud_name and api_key and api_secret and cloudinary is not None)
+
+
+def upload_to_storage(file_storage, folder, prefix='upload'):
+    if not file_storage or not getattr(file_storage, 'filename', None):
+        raise ValueError('No file selected.')
+
+    cloud_name = os.getenv('CLOUDINARY_CLOUD_NAME')
+    api_key = os.getenv('CLOUDINARY_API_KEY')
+    api_secret = os.getenv('CLOUDINARY_API_SECRET')
+
+    if cloud_name and api_key and api_secret and cloudinary is not None:
+        cloudinary.config(
+            cloud_name=cloud_name,
+            api_key=api_key,
+            api_secret=api_secret,
+        )
+        public_id = f"{prefix}_{uuid.uuid4().hex}_{secure_filename(file_storage.filename).rsplit('.', 1)[0] if '.' in secure_filename(file_storage.filename) else secure_filename(file_storage.filename)}"
+        res = uploader.upload(file_storage, folder=folder, public_id=public_id, resource_type='auto')
+        return {
+            'url': res.get('secure_url') or res.get('url'),
+            'path': res.get('secure_url') or res.get('url'),
+            'name': file_storage.filename,
+            'public_id': res.get('public_id'),
+            'storage': 'cloudinary',
+        }
+
+    target_dir = os.path.join(app.config['UPLOAD_FOLDER'], folder)
+    os.makedirs(target_dir, exist_ok=True)
+    safe_name = secure_filename(file_storage.filename)
+    unique_name = f"{prefix}_{uuid.uuid4().hex}_{safe_name}"
+    local_path = os.path.join(target_dir, unique_name)
+    file_storage.save(local_path)
+    relative_path = os.path.join('uploads', folder, unique_name).replace('\\', '/')
+    return {
+        'url': f"/uploads/{folder}/{unique_name}",
+        'path': relative_path,
+        'name': safe_name,
+        'public_id': unique_name,
+        'storage': 'local',
+    }
+
 
 def allowed_file(filename, allowed_set):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed_set
@@ -225,11 +282,15 @@ def api_pdf_read(resource_id):
     resource = query_db("SELECT * FROM pdf_resources WHERE id = %s", (resource_id,), fetch='one')
     if not resource:
         abort(404, description="PDF resource not found.")
-    
-    file_path = os.path.join(BASE_DIR, resource['file_path'])
+
+    file_path_value = resource['file_path']
+    if str(file_path_value).startswith('http://') or str(file_path_value).startswith('https://'):
+        return redirect(file_path_value)
+
+    file_path = os.path.join(BASE_DIR, file_path_value)
     if not os.path.exists(file_path):
         abort(404, description="PDF file not found on disk.")
-    
+
     return send_file(
         file_path,
         mimetype='application/pdf',
@@ -243,11 +304,15 @@ def api_pdf_download(resource_id):
     resource = query_db("SELECT * FROM pdf_resources WHERE id = %s", (resource_id,), fetch='one')
     if not resource:
         abort(404, description="PDF resource not found.")
-    
-    file_path = os.path.join(BASE_DIR, resource['file_path'])
+
+    file_path_value = resource['file_path']
+    if str(file_path_value).startswith('http://') or str(file_path_value).startswith('https://'):
+        return redirect(file_path_value)
+
+    file_path = os.path.join(BASE_DIR, file_path_value)
     if not os.path.exists(file_path):
         abort(404, description="PDF file not found on disk.")
-    
+
     return send_file(
         file_path,
         mimetype='application/pdf',
@@ -299,12 +364,12 @@ def api_profile_photo():
     file = request.files['photo']
     if file.filename == '':
         return jsonify({'error': 'No selected file'}), 400
-    
+
     if file and allowed_file(file.filename, ALLOWED_EXTENSIONS_IMG):
-        filename = secure_filename(f"student_1_{file.filename}")
-        save_path = os.path.join(app.config['UPLOAD_FOLDER'], 'students', filename)
-        file.save(save_path)
-        photo_url = f"/uploads/students/{filename}"
+        if os.getenv('FLASK_ENV') == 'production' and not storage_is_configured():
+            return jsonify({'error': 'Cloud storage is not configured: set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET.'}), 500
+        upload_meta = upload_to_storage(file, 'students', 'student_profile')
+        photo_url = upload_meta['url']
         query_db("UPDATE students SET photo_url = %s WHERE id = 1", (photo_url,), commit=True)
         return jsonify({'photo_url': photo_url})
     return jsonify({'error': 'Invalid image file format'}), 400
@@ -366,14 +431,10 @@ def api_add_topic():
     if 'pdf_file' in request.files and request.files['pdf_file'].filename:
         pfile = request.files['pdf_file']
         if allowed_file(pfile.filename, ALLOWED_EXTENSIONS_PDF):
-            mod_folder = f"module_{module_id}"
-            target_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'modules', mod_folder)
-            os.makedirs(target_dir, exist_ok=True)
-            stored_name = f"subtopic_{sub_id}_{secure_filename(pfile.filename)}"
-            abs_path = os.path.join(target_dir, stored_name)
-            rel_path = f"uploads/modules/{mod_folder}/{stored_name}"
-            pfile.save(abs_path)
-
+            if os.getenv('FLASK_ENV') == 'production' and not storage_is_configured():
+                return jsonify({'error': 'Cloud storage is not configured: set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET.'}), 500
+            upload_meta = upload_to_storage(pfile, f'modules/module_{module_id}', f'subtopic_{sub_id}')
+            rel_path = upload_meta.get('path') or upload_meta['url']
             pdf_id = query_db("""
                 INSERT INTO pdf_resources (subtopic_id, file_name, file_path)
                 VALUES (%s, %s, %s)
@@ -447,12 +508,14 @@ def api_admin_delete_subtopic(subtopic_id):
     """Delete a subtopic and its associated PDF."""
     pdf = query_db("SELECT file_path FROM pdf_resources WHERE subtopic_id = %s", (subtopic_id,), fetch='one')
     if pdf:
-        full_p = os.path.join(BASE_DIR, pdf['file_path'])
-        if os.path.exists(full_p):
-            try:
-                os.remove(full_p)
-            except Exception:
-                pass
+        file_path_value = pdf['file_path']
+        if not str(file_path_value).startswith('http://') and not str(file_path_value).startswith('https://'):
+            full_p = os.path.join(BASE_DIR, file_path_value)
+            if os.path.exists(full_p):
+                try:
+                    os.remove(full_p)
+                except Exception:
+                    pass
     query_db("DELETE FROM subtopics WHERE id = %s", (subtopic_id,), commit=True)
     return jsonify({'success': True})
 
@@ -475,17 +538,11 @@ def api_admin_upload_pdf():
     if file.filename == '' or not allowed_file(file.filename, ALLOWED_EXTENSIONS_PDF):
         return jsonify({'error': 'Please select a valid .pdf file.'}), 400
 
-    mod_folder = f"module_{subtopic['module_id']}"
-    target_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'modules', mod_folder)
-    os.makedirs(target_dir, exist_ok=True)
+    if os.getenv('FLASK_ENV') == 'production' and not storage_is_configured():
+        return jsonify({'error': 'Cloud storage is not configured: set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET.'}), 500
 
-    clean_name = secure_filename(file.filename)
-    # Ensure uniqueness or keep subtopic clean name
-    stored_name = f"subtopic_{subtopic_id}_{clean_name}"
-    abs_save_path = os.path.join(target_dir, stored_name)
-    rel_path = f"uploads/modules/{mod_folder}/{stored_name}"
-
-    file.save(abs_save_path)
+    upload_meta = upload_to_storage(file, f'modules/module_{subtopic["module_id"]}', f'subtopic_{subtopic_id}')
+    rel_path = upload_meta.get('path') or upload_meta['url']
 
     # Check if a PDF resource already exists for this subtopic
     existing_pdf = query_db("SELECT id, file_path FROM pdf_resources WHERE subtopic_id = %s", (subtopic_id,), fetch='one')
@@ -523,12 +580,14 @@ def api_admin_delete_pdf(resource_id):
     if not resource:
         return jsonify({'error': 'PDF resource not found.'}), 404
 
-    abs_path = os.path.join(BASE_DIR, resource['file_path'])
-    if os.path.exists(abs_path):
-        try:
-            os.remove(abs_path)
-        except Exception:
-            pass
+    file_path_value = resource['file_path']
+    if not str(file_path_value).startswith('http://') and not str(file_path_value).startswith('https://'):
+        abs_path = os.path.join(BASE_DIR, file_path_value)
+        if os.path.exists(abs_path):
+            try:
+                os.remove(abs_path)
+            except Exception:
+                pass
 
     query_db("DELETE FROM pdf_resources WHERE id = %s", (resource_id,), commit=True)
     return jsonify({'success': True})
@@ -588,32 +647,31 @@ def api_experiments():
         if 'cover' in request.files and request.files['cover'].filename:
             cfile = request.files['cover']
             if allowed_file(cfile.filename, ALLOWED_EXTENSIONS_IMG):
-                cname = secure_filename(f"exp_{exp_no}_{cfile.filename}")
-                cpath = os.path.join(app.config['UPLOAD_FOLDER'], 'experiments', 'images', cname)
-                cfile.save(cpath)
-                cover_image = f"/uploads/experiments/images/{cname}"
+                if os.getenv('FLASK_ENV') == 'production' and not storage_is_configured():
+                    return jsonify({'error': 'Cloud storage is not configured: set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET.'}), 500
+                upload_meta = upload_to_storage(cfile, 'experiments/images', f'exp_{exp_no}_cover')
+                cover_image = upload_meta.get('url') or upload_meta.get('path')
 
         # Check uploaded execution code file
         if 'code_file' in request.files and request.files['code_file'].filename:
             cd_file = request.files['code_file']
             if allowed_file(cd_file.filename, ALLOWED_EXTENSIONS_CODE):
-                c_clean = secure_filename(cd_file.filename)
-                c_save_name = f"exp_{exp_no}_{c_clean}"
-                c_abs = os.path.join(app.config['UPLOAD_FOLDER'], 'experiments', 'code', c_save_name)
-                extracted = extract_code_from_file(cd_file, c_abs)
+                if os.getenv('FLASK_ENV') == 'production' and not storage_is_configured():
+                    return jsonify({'error': 'Cloud storage is not configured: set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET.'}), 500
+                upload_meta = upload_to_storage(cd_file, 'experiments/code', f'exp_{exp_no}_code')
                 code_file_name = cd_file.filename
-                code_file_path = f"uploads/experiments/code/{c_save_name}"
+                code_file_path = upload_meta.get('path') or upload_meta.get('url')
+                extracted = extract_code_from_file(cd_file, os.path.join(app.config['UPLOAD_FOLDER'], 'experiments', 'code', f"exp_{exp_no}_{secure_filename(cd_file.filename)}"))
                 code_content = extracted
 
         # Check uploaded execution output image
         if 'output_image_file' in request.files and request.files['output_image_file'].filename:
             out_img = request.files['output_image_file']
             if allowed_file(out_img.filename, ALLOWED_EXTENSIONS_IMG):
-                o_clean = secure_filename(out_img.filename)
-                o_save_name = f"exp_{exp_no}_output_{o_clean}"
-                o_abs = os.path.join(app.config['UPLOAD_FOLDER'], 'experiments', 'outputs', o_save_name)
-                out_img.save(o_abs)
-                output_image = f"/uploads/experiments/outputs/{o_save_name}"
+                if os.getenv('FLASK_ENV') == 'production' and not storage_is_configured():
+                    return jsonify({'error': 'Cloud storage is not configured: set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET.'}), 500
+                upload_meta = upload_to_storage(out_img, 'experiments/outputs', f'exp_{exp_no}_output')
+                output_image = upload_meta.get('url') or upload_meta.get('path')
 
         sub_experiments = []
 
@@ -667,22 +725,24 @@ def api_upload_execution(exp_id):
     if 'code_file' in request.files and request.files['code_file'].filename:
         cfile = request.files['code_file']
         if allowed_file(cfile.filename, ALLOWED_EXTENSIONS_CODE):
+            if os.getenv('FLASK_ENV') == 'production' and not storage_is_configured():
+                return jsonify({'error': 'Cloud storage is not configured: set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET.'}), 500
+            upload_meta = upload_to_storage(cfile, 'experiments/code', f"exp_{exp['experiment_no']}_code")
             clean_name = secure_filename(cfile.filename)
             save_name = f"exp_{exp['experiment_no']}_{clean_name}"
             abs_p = os.path.join(app.config['UPLOAD_FOLDER'], 'experiments', 'code', save_name)
             code_content = extract_code_from_file(cfile, abs_p)
             code_file_name = cfile.filename
-            code_file_path = f"uploads/experiments/code/{save_name}"
+            code_file_path = upload_meta.get('path') or upload_meta.get('url')
 
     # Output image upload
     if 'output_image' in request.files and request.files['output_image'].filename:
         ofile = request.files['output_image']
         if allowed_file(ofile.filename, ALLOWED_EXTENSIONS_IMG):
-            clean_name = secure_filename(ofile.filename)
-            save_name = f"exp_{exp['experiment_no']}_out_{clean_name}"
-            abs_p = os.path.join(app.config['UPLOAD_FOLDER'], 'experiments', 'outputs', save_name)
-            ofile.save(abs_p)
-            output_image = f"/uploads/experiments/outputs/{save_name}"
+            if os.getenv('FLASK_ENV') == 'production' and not storage_is_configured():
+                return jsonify({'error': 'Cloud storage is not configured: set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET.'}), 500
+            upload_meta = upload_to_storage(ofile, 'experiments/outputs', f"exp_{exp['experiment_no']}_output")
+            output_image = upload_meta.get('url') or upload_meta.get('path')
 
     query_db("""
         UPDATE experiments SET 

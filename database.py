@@ -1,137 +1,124 @@
 import os
 import sqlite3
-import pymysql
-from pymysql.cursors import DictCursor
-from werkzeug.security import generate_password_hash, check_password_hash
-from dotenv import load_dotenv
 
-# Load environment variables
+from dotenv import load_dotenv
+from werkzeug.security import generate_password_hash
+
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+except ImportError:  # pragma: no cover
+    psycopg2 = None
+    RealDictCursor = None
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, '.env'))
 
-DB_HOST = os.getenv('DB_HOST', 'localhost')
-DB_PORT = int(os.getenv('DB_PORT', 3306))
-DB_USER = os.getenv('DB_USER', 'root')
-DB_PASSWORD = os.getenv('DB_PASSWORD', '')
-DB_NAME = os.getenv('DB_NAME', 'ds_lab')
+DATABASE_URL = os.getenv('DATABASE_URL')
 SQLITE_PATH = os.path.join(BASE_DIR, 'ds_lab.db')
 
-_USE_SQLITE = False
+
+def is_production_environment():
+    return os.getenv('FLASK_ENV') == 'production' or os.getenv('APP_ENV') == 'production' or os.getenv('RENDER') == 'true'
+
+
+def get_database_backend():
+    if DATABASE_URL:
+        lowered = DATABASE_URL.lower()
+        if lowered.startswith('postgres://') or lowered.startswith('postgresql://'):
+            return 'postgres'
+        if lowered.startswith('mysql://'):
+            raise RuntimeError('MySQL is no longer supported. Set DATABASE_URL to a PostgreSQL connection string.')
+    if is_production_environment():
+        raise RuntimeError('DATABASE_URL is required in production. Configure a Neon PostgreSQL URL before starting the app.')
+    return 'sqlite'
+
 
 def get_connection():
-    """
-    Attempts to connect to MySQL. If MySQL is unavailable,
-    falls back cleanly to SQLite for seamless local execution.
-    """
-    global _USE_SQLITE
-    if _USE_SQLITE:
-        conn = sqlite3.connect(SQLITE_PATH)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn, 'sqlite'
+    backend = get_database_backend()
+    if backend == 'postgres':
+        if psycopg2 is None:
+            raise RuntimeError('psycopg2 is required for PostgreSQL support. Install the project dependencies.')
+        kwargs = {}
+        if 'sslmode=' not in DATABASE_URL.lower():
+            kwargs['sslmode'] = 'require'
+        conn = psycopg2.connect(DATABASE_URL, **kwargs)
+        conn.autocommit = False
+        return conn, 'postgres'
 
-    try:
-        # First ensure database exists in MySQL
-        conn_server = pymysql.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            charset='utf8mb4',
-            cursorclass=DictCursor,
-            connect_timeout=2
-        )
-        with conn_server.cursor() as cursor:
-            cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{DB_NAME}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;")
-        conn_server.commit()
-        conn_server.close()
+    conn = sqlite3.connect(SQLITE_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA foreign_keys = ON')
+    return conn, 'sqlite'
 
-        conn = pymysql.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            database=DB_NAME,
-            charset='utf8mb4',
-            cursorclass=DictCursor,
-            autocommit=False
-        )
-        return conn, 'mysql'
-    except Exception as e:
-        print(f"[Database Notice] MySQL connection to {DB_HOST}:{DB_PORT}/{DB_NAME} not available ({e}).")
-        print(f"[Database Notice] Using local SQLite database at {SQLITE_PATH} with full feature parity.")
-        _USE_SQLITE = True
-        conn = sqlite3.connect(SQLITE_PATH)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn, 'sqlite'
+
+def _normalize_sqlite_query(sql):
+    return sql.replace('%s', '?')
+
+
+def _ensure_insert_returning(sql, backend):
+    if backend != 'postgres':
+        return sql
+    upper = sql.strip()
+    if not upper.upper().startswith('INSERT '):
+        return sql
+    if 'RETURNING' in upper.upper():
+        return sql
+    return f"{sql.rstrip()} RETURNING id"
+
 
 def query_db(sql, params=None, fetch='all', commit=False):
-    """
-    Unified database query executor supporting both MySQL (%s) and SQLite (?).
-    Returns dictionary / list of dictionaries, or lastrowid on insert.
-    """
-    conn, engine = get_connection()
+    conn, backend = get_connection()
     params = params or ()
-    
-    if engine == 'sqlite':
-        # Adapt SQL placeholders: %s -> ?
-        sqlite_sql = sql.replace('%s', '?')
-        # Adapt auto_increment / timestamps if present in DDL
-        cur = conn.cursor()
-        try:
+
+    try:
+        if backend == 'sqlite':
+            sqlite_sql = _normalize_sqlite_query(sql)
+            cur = conn.cursor()
             cur.execute(sqlite_sql, params)
             if commit:
                 conn.commit()
-                last_id = cur.lastrowid
-                conn.close()
-                return last_id
-            
-            if fetch == 'one':
-                row = cur.fetchone()
-                result = dict(row) if row else None
-            elif fetch == 'all':
-                result = [dict(r) for r in cur.fetchall()]
+                result = cur.lastrowid
             else:
-                result = None
-            conn.close()
-            return result
-        except Exception as e:
-            if commit:
-                conn.rollback()
-            conn.close()
-            raise e
-    else:
-        # MySQL engine
-        try:
-            with conn.cursor() as cur:
-                cur.execute(sql, params)
-                if commit:
-                    conn.commit()
-                    last_id = cur.lastrowid
-                    conn.close()
-                    return last_id
-
                 if fetch == 'one':
-                    result = cur.fetchone()
+                    row = cur.fetchone()
+                    result = dict(row) if row is not None else None
                 elif fetch == 'all':
-                    result = cur.fetchall()
+                    result = [dict(r) for r in cur.fetchall()]
                 else:
                     result = None
-                conn.close()
-                return result
-        except Exception as e:
-            if commit:
-                conn.rollback()
             conn.close()
-            raise e
+            return result
+
+        sql_to_run = _ensure_insert_returning(sql, backend)
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql_to_run, params)
+            if commit:
+                conn.commit()
+                row = cur.fetchone()
+                result = row['id'] if row and 'id' in row else None
+            else:
+                if fetch == 'one':
+                    row = cur.fetchone()
+                    result = dict(row) if row is not None else None
+                elif fetch == 'all':
+                    result = [dict(r) for r in cur.fetchall()]
+                else:
+                    result = None
+        conn.close()
+        return result
+    except Exception:
+        if backend == 'sqlite' and commit:
+            conn.rollback()
+        elif backend == 'postgres' and conn:
+            conn.rollback()
+        raise
+
 
 def generate_sample_pdf(file_path, title, module_title, subtopic_name, overview_text, points):
-    """
-    Generates a clean, valid PDF 1.4 document for laboratory subtopics.
-    """
+    """Generates a clean PDF file used in module resources."""
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    
+
     stream_content = f"""BT
 /F1 18 Tf
 50 740 Td
@@ -154,9 +141,9 @@ def generate_sample_pdf(file_path, title, module_title, subtopic_name, overview_
 /F2 10 Tf
 0 -18 Td
 """
-    for pt in points:
-        safe_pt = pt.replace('\\', '\\\\').replace('(', '\\(').replace(')', '\\)')
-        stream_content += f"( - {safe_pt}) Tj\n0 -16 Td\n"
+    for point in points:
+        safe_point = point.replace('\\', '\\\\').replace('(', '\\(').replace(')', '\\)')
+        stream_content += f"( - {safe_point}) Tj\n0 -16 Td\n"
 
     stream_content += """0 -20 Td
 /F1 11 Tf
@@ -188,180 +175,65 @@ ET
 
     with open(file_path, 'wb') as f:
         offsets = []
-        cur = 0
-        for b in body:
-            offsets.append(cur)
-            f.write(b + b'\n')
-            cur += len(b) + 1
-        xref_start = cur
+        current = 0
+        for chunk in body:
+            offsets.append(current)
+            f.write(chunk + b'\n')
+            current += len(chunk) + 1
+        xref_start = current
         f.write(b'xref\n0 7\n0000000000 65535 f \n')
         for off in offsets[1:]:
             f.write(f'{off:010d} 00000 n \n'.encode('latin1'))
         f.write(f'trailer << /Size 7 /Root 1 0 R >>\nstartxref\n{xref_start}\n%%EOF\n'.encode('latin1'))
 
-def init_db():
-    """
-    Initializes database tables, indices, default records,
-    and starter PDF documents if not yet present.
-    """
-    conn, engine = get_connection()
-    cursor = conn.cursor()
 
-    if engine == 'mysql':
-        # Create MySQL tables
-        cursor.execute("""
+def _create_schema(cursor, backend):
+    if backend == 'postgres':
+        cursor.execute('''
         CREATE TABLE IF NOT EXISTS students (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            name VARCHAR(100) NOT NULL DEFAULT 'Data Science Scholar',
-            register_no VARCHAR(50) NOT NULL DEFAULT '22DS101',
-            section VARCHAR(20) NOT NULL DEFAULT 'DS-A',
-            branch VARCHAR(50) NOT NULL DEFAULT 'Data Science & AI',
-            faculty_name VARCHAR(100) NOT NULL DEFAULT 'Dr. S. Ramanathan',
-            photo_url VARCHAR(500) DEFAULT '/static/images/default_student.png',
-            github_url VARCHAR(500) DEFAULT 'https://github.com/lohitkumar/ds-laboratory',
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB;
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS modules (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            module_number VARCHAR(20) NOT NULL,
-            title VARCHAR(200) NOT NULL,
-            description TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB;
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS subtopics (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            module_id INT NOT NULL,
-            title VARCHAR(200) NOT NULL,
-            description TEXT,
-            display_order INT DEFAULT 1,
-            FOREIGN KEY (module_id) REFERENCES modules(id) ON DELETE CASCADE
-        ) ENGINE=InnoDB;
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS pdf_resources (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            subtopic_id INT NOT NULL,
-            file_name VARCHAR(255) NOT NULL,
-            file_path VARCHAR(500) NOT NULL,
-            uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (subtopic_id) REFERENCES subtopics(id) ON DELETE CASCADE
-        ) ENGINE=InnoDB;
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS experiments (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            experiment_no VARCHAR(20) NOT NULL,
-            title VARCHAR(200) NOT NULL,
-            short_description TEXT,
-            cover_image VARCHAR(500) DEFAULT '',
-            d2_heading VARCHAR(200) DEFAULT 'Experiment Details & Implementation',
-            long_content LONGTEXT,
-            code_file_name VARCHAR(255) DEFAULT '',
-            code_file_path VARCHAR(500) DEFAULT '',
-            code_content LONGTEXT,
-            output_image VARCHAR(500) DEFAULT '',
-            output_text LONGTEXT,
-            github_url VARCHAR(500) DEFAULT '',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB;
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS experiment_media (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            experiment_id INT NOT NULL,
-            media_type VARCHAR(50) NOT NULL,
-            media_url VARCHAR(500) NOT NULL,
-            FOREIGN KEY (experiment_id) REFERENCES experiments(id) ON DELETE CASCADE
-        ) ENGINE=InnoDB;
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS sub_experiments (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            experiment_id INT NOT NULL,
-            letter VARCHAR(10) NOT NULL,
-            title VARCHAR(200) NOT NULL,
-            short_description TEXT,
-            d2_heading VARCHAR(200) DEFAULT 'Sub-Experiment Details',
-            long_content LONGTEXT,
-            cover_image VARCHAR(500) DEFAULT '',
-            video_url VARCHAR(500) DEFAULT '',
-            github_url VARCHAR(500) DEFAULT '',
-            completed BOOLEAN DEFAULT TRUE,
-            FOREIGN KEY (experiment_id) REFERENCES experiments(id) ON DELETE CASCADE
-        ) ENGINE=InnoDB;
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS admins (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            username VARCHAR(50) NOT NULL UNIQUE,
-            password_hash VARCHAR(255) NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB;
-        """)
-        conn.commit()
-
-    else:
-        # SQLite schema
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS students (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             name TEXT NOT NULL DEFAULT 'Data Science Scholar',
             register_no TEXT NOT NULL DEFAULT '22DS101',
             section TEXT NOT NULL DEFAULT 'DS-A',
             branch TEXT NOT NULL DEFAULT 'Data Science & AI',
             faculty_name TEXT NOT NULL DEFAULT 'Dr. S. Ramanathan',
-            photo_url TEXT DEFAULT '/static/images/default_student.png',
+            photo_url TEXT DEFAULT '/static/images/default_student.svg',
             github_url TEXT DEFAULT 'https://github.com/lohitkumar/ds-laboratory',
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        """)
-
-        cursor.execute("""
+        ''')
+        cursor.execute('''
         CREATE TABLE IF NOT EXISTS modules (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             module_number TEXT NOT NULL,
             title TEXT NOT NULL,
             description TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        """)
-
-        cursor.execute("""
+        ''')
+        cursor.execute('''
         CREATE TABLE IF NOT EXISTS subtopics (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             module_id INTEGER NOT NULL,
             title TEXT NOT NULL,
             description TEXT,
             display_order INTEGER DEFAULT 1,
             FOREIGN KEY (module_id) REFERENCES modules(id) ON DELETE CASCADE
         );
-        """)
-
-        cursor.execute("""
+        ''')
+        cursor.execute('''
         CREATE TABLE IF NOT EXISTS pdf_resources (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             subtopic_id INTEGER NOT NULL,
             file_name TEXT NOT NULL,
             file_path TEXT NOT NULL,
             uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (subtopic_id) REFERENCES subtopics(id) ON DELETE CASCADE
         );
-        """)
-
-        cursor.execute("""
+        ''')
+        cursor.execute('''
         CREATE TABLE IF NOT EXISTS experiments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             experiment_no TEXT NOT NULL,
             title TEXT NOT NULL,
             short_description TEXT,
@@ -376,21 +248,19 @@ def init_db():
             github_url TEXT DEFAULT '',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        """)
-
-        cursor.execute("""
+        ''')
+        cursor.execute('''
         CREATE TABLE IF NOT EXISTS experiment_media (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             experiment_id INTEGER NOT NULL,
             media_type TEXT NOT NULL,
             media_url TEXT NOT NULL,
             FOREIGN KEY (experiment_id) REFERENCES experiments(id) ON DELETE CASCADE
         );
-        """)
-
-        cursor.execute("""
+        ''')
+        cursor.execute('''
         CREATE TABLE IF NOT EXISTS sub_experiments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             experiment_id INTEGER NOT NULL,
             letter TEXT NOT NULL,
             title TEXT NOT NULL,
@@ -400,329 +270,348 @@ def init_db():
             cover_image TEXT DEFAULT '',
             video_url TEXT DEFAULT '',
             github_url TEXT DEFAULT '',
-            completed BOOLEAN DEFAULT 1,
+            completed BOOLEAN DEFAULT TRUE,
             FOREIGN KEY (experiment_id) REFERENCES experiments(id) ON DELETE CASCADE
         );
-        """)
-
-        cursor.execute("""
+        ''')
+        cursor.execute('''
         CREATE TABLE IF NOT EXISTS admins (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             username TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        """)
-        conn.commit()
+        ''')
+        return
 
-    # Migration check: Ensure new columns exist in existing tables
-    try:
-        new_cols = [
-            ("code_file_name", "TEXT DEFAULT ''"),
-            ("code_file_path", "TEXT DEFAULT ''"),
-            ("code_content", "TEXT DEFAULT ''"),
-            ("output_image", "TEXT DEFAULT ''"),
-            ("output_text", "TEXT DEFAULT ''")
-        ]
-        if engine == 'sqlite':
-            cursor.execute("PRAGMA table_info(experiments)")
-            existing_cols = [row[1] for row in cursor.fetchall()]
-            for col_name, col_def in new_cols:
-                if col_name not in existing_cols:
-                    cursor.execute(f"ALTER TABLE experiments ADD COLUMN {col_name} {col_def}")
-            conn.commit()
-        else:
-            for col_name, col_def in new_cols:
-                try:
-                    cursor.execute(f"ALTER TABLE experiments ADD COLUMN IF NOT EXISTS {col_name} {col_def}")
-                except Exception:
-                    pass
-            conn.commit()
-    except Exception as e:
-        print("[Migration Notice] Column check:", e)
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS students (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL DEFAULT 'Data Science Scholar',
+        register_no TEXT NOT NULL DEFAULT '22DS101',
+        section TEXT NOT NULL DEFAULT 'DS-A',
+        branch TEXT NOT NULL DEFAULT 'Data Science & AI',
+        faculty_name TEXT NOT NULL DEFAULT 'Dr. S. Ramanathan',
+        photo_url TEXT DEFAULT '/static/images/default_student.svg',
+        github_url TEXT DEFAULT 'https://github.com/lohitkumar/ds-laboratory',
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    ''')
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS modules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        module_number TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    ''')
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS subtopics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        module_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        display_order INTEGER DEFAULT 1,
+        FOREIGN KEY (module_id) REFERENCES modules(id) ON DELETE CASCADE
+    );
+    ''')
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS pdf_resources (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        subtopic_id INTEGER NOT NULL,
+        file_name TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (subtopic_id) REFERENCES subtopics(id) ON DELETE CASCADE
+    );
+    ''')
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS experiments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        experiment_no TEXT NOT NULL,
+        title TEXT NOT NULL,
+        short_description TEXT,
+        cover_image TEXT DEFAULT '',
+        d2_heading TEXT DEFAULT 'Experiment Details & Implementation',
+        long_content TEXT,
+        code_file_name TEXT DEFAULT '',
+        code_file_path TEXT DEFAULT '',
+        code_content TEXT DEFAULT '',
+        output_image TEXT DEFAULT '',
+        output_text TEXT DEFAULT '',
+        github_url TEXT DEFAULT '',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    ''')
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS experiment_media (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        experiment_id INTEGER NOT NULL,
+        media_type TEXT NOT NULL,
+        media_url TEXT NOT NULL,
+        FOREIGN KEY (experiment_id) REFERENCES experiments(id) ON DELETE CASCADE
+    );
+    ''')
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS sub_experiments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        experiment_id INTEGER NOT NULL,
+        letter TEXT NOT NULL,
+        title TEXT NOT NULL,
+        short_description TEXT,
+        d2_heading TEXT DEFAULT 'Sub-Experiment Details',
+        long_content TEXT,
+        cover_image TEXT DEFAULT '',
+        video_url TEXT DEFAULT '',
+        github_url TEXT DEFAULT '',
+        completed BOOLEAN DEFAULT 1,
+        FOREIGN KEY (experiment_id) REFERENCES experiments(id) ON DELETE CASCADE
+    );
+    ''')
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS admins (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    ''')
 
+
+def init_db():
+    """Ensures the schema exists and applies simple migrations for missing columns."""
+    conn, backend = get_connection()
+    cursor = conn.cursor()
+    _create_schema(cursor, backend)
+
+    if backend == 'postgres':
+        for column in ['code_file_name', 'code_file_path', 'code_content', 'output_image', 'output_text']:
+            try:
+                cursor.execute(f"ALTER TABLE experiments ADD COLUMN IF NOT EXISTS {column} TEXT DEFAULT ''")
+            except Exception:
+                pass
+    else:
+        cursor.execute('PRAGMA table_info(experiments)')
+        existing = {row[1] for row in cursor.fetchall()}
+        for column in ['code_file_name', 'code_file_path', 'code_content', 'output_image', 'output_text']:
+            if column not in existing:
+                cursor.execute(f'ALTER TABLE experiments ADD COLUMN {column} TEXT DEFAULT ""')
+
+    conn.commit()
     conn.close()
-
-    # Seed data
     seed_initial_data()
 
+
 def seed_initial_data():
-    """
-    Seeds default student profile, admin credentials, 5 modules,
-    subtopics, sample PDFs, and initial laboratory experiment.
-    """
-    # 1. Admin
+    """Seeds the minimum dataset expected by the portal pages and tests."""
     admin_user = os.getenv('ADMIN_USERNAME', 'admin')
     admin_pass = os.getenv('ADMIN_PASSWORD', 'admin123')
-    existing_admin = query_db("SELECT id FROM admins WHERE username = %s", (admin_user,), fetch='one')
+
+    existing_admin = query_db('SELECT id FROM admins WHERE username = %s', (admin_user,), fetch='one')
     if not existing_admin:
-        pw_hash = generate_password_hash(admin_pass)
-        query_db("INSERT INTO admins (username, password_hash) VALUES (%s, %s)", (admin_user, pw_hash), commit=True)
+        query_db(
+            'INSERT INTO admins (username, password_hash) VALUES (%s, %s)',
+            (admin_user, generate_password_hash(admin_pass)),
+            commit=True,
+        )
 
-    # 2. Student Profile
-    student = query_db("SELECT id FROM students WHERE id = 1", fetch='one')
+    student = query_db('SELECT id FROM students WHERE id = 1', fetch='one')
     if not student:
-        query_db("""
-        INSERT INTO students (id, name, register_no, section, branch, faculty_name, photo_url, github_url)
-        VALUES (1, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-            'Lohith Goud',
-            '22DS101',
-            'DS-A',
-            'Data Science & AI',
-            'Dr. S. Ramanathan',
-            '/static/images/default_student.svg',
-            'https://github.com/lohithgoud/ds-laboratory'
-        ), commit=True)
+        query_db(
+            '''
+            INSERT INTO students (id, name, register_no, section, branch, faculty_name, photo_url, github_url)
+            VALUES (1, %s, %s, %s, %s, %s, %s, %s)
+            ''',
+            (
+                'Lohith Goud',
+                '22DS101',
+                'DS-A',
+                'Data Science & AI',
+                'Dr. S. Ramanathan',
+                '/static/images/default_student.svg',
+                'https://github.com/lohithgoud/ds-laboratory',
+            ),
+            commit=True,
+        )
     else:
-        # Keep name in sync with Lohith Goud if default was set
-        query_db("UPDATE students SET name = 'Lohith Goud', photo_url = '/static/images/default_student.svg' WHERE id = 1 AND name = 'Data Science Scholar'", commit=True)
+        query_db(
+            "UPDATE students SET name = 'Lohith Goud', photo_url = '/static/images/default_student.svg' WHERE id = 1 AND name = 'Data Science Scholar'",
+            commit=True,
+        )
 
-    # 3. Five Modules & Subtopics
-    modules_spec = [
+    module_specs = [
         {
-            "id": 1,
-            "module_number": "Module I",
-            "title": "Module I – Data Science Fundamentals",
-            "description": "Introduction to the foundations of Data Science, lifecycle methodologies, data types, acquisition, and preprocessing workflows.",
-            "subtopics": [
-                ("Introduction to Data Science", "Definition, domain scope, real-world applications, and core skill matrix of data scientists."),
-                ("Data Science Lifecycle", "Systematic phases: Problem formulation, data acquisition, data preparation, exploratory analysis, modeling, evaluation, and deployment."),
-                ("Types of Data", "Structured, semi-structured, unstructured, quantitative continuous/discrete, and qualitative nominal/ordinal data."),
-                ("Data Collection", "Data ingestion through web scraping, REST APIs, SQL databases, sensor streams, and public datasets."),
-                ("Data Preprocessing", "Data cleaning, imputation of missing entries, outlier mitigation, scaling, normalization, and one-hot encoding.")
+            'id': 1,
+            'module_number': 'Module I',
+            'title': 'Module I – Data Science Fundamentals',
+            'description': 'Introduction to the foundations of Data Science, lifecycle methodologies, data types, acquisition, and preprocessing workflows.',
+            'subtopics': [
+                ('Introduction to Data Science', 'Definition, domain scope, real-world applications, and core skill matrix of data scientists.'),
+                ('Data Science Lifecycle', 'Systematic phases: Problem formulation, data acquisition, data preparation, exploratory analysis, modeling, evaluation, and deployment.'),
+                ('Types of Data', 'Structured, semi-structured, unstructured, quantitative continuous/discrete, and qualitative nominal/ordinal data.'),
+                ('Data Collection', 'Data ingestion through web scraping, REST APIs, SQL databases, sensor streams, and public datasets.'),
+                ('Data Preprocessing', 'Data cleaning, imputation of missing entries, outlier mitigation, scaling, normalization, and one-hot encoding.')
             ]
         },
         {
-            "id": 2,
-            "module_number": "Module II",
-            "title": "Module II – Python for Data Science",
-            "description": "Core programming in Python tailored for data processing, vectorized computations with NumPy, tabular manipulation with Pandas, and cleaning routines.",
-            "subtopics": [
-                ("Python Basics", "Core syntax, data structures (lists, tuples, dicts), functions, list comprehensions, and error handling."),
-                ("NumPy", "N-dimensional arrays, broadcasting, vectorized math, array reshaping, slicing, and linear algebra routines."),
-                ("Pandas", "Series and DataFrame data structures, indexing, filtering, column manipulations, and merging/joining tables."),
-                ("Data Cleaning", "Handling null values, deduplication, string cleaning, type conversions, and handling datetime columns."),
-                ("Data Manipulation", "Aggregations with groupby, pivot tables, multi-indexing, and reshaping with melt and stack.")
+            'id': 2,
+            'module_number': 'Module II',
+            'title': 'Module II – Python for Data Science',
+            'description': 'Core programming in Python tailored for data processing, vectorized computations with NumPy, tabular manipulation with Pandas, and cleaning routines.',
+            'subtopics': [
+                ('Python Basics', 'Core syntax, data structures (lists, tuples, dicts), functions, list comprehensions, and error handling.'),
+                ('NumPy', 'N-dimensional arrays, broadcasting, vectorized math, array reshaping, slicing, and linear algebra routines.'),
+                ('Pandas', 'Series and DataFrame data structures, indexing, filtering, column manipulations, and merging/joining tables.'),
+                ('Data Cleaning', 'Handling null values, deduplication, string cleaning, type conversions, and handling datetime columns.'),
+                ('Data Manipulation', 'Aggregations with groupby, pivot tables, multi-indexing, and reshaping with melt and stack.')
             ]
         },
         {
-            "id": 3,
-            "module_number": "Module III",
-            "title": "Module III – Data Visualization",
-            "description": "Principles of graphical data representation, visual analytics using Matplotlib and Seaborn, exploratory data analysis (EDA), and data interpretation.",
-            "subtopics": [
-                ("Matplotlib", "Figure architecture, line plots, scatter charts, bar graphs, histograms, customizing axes, legends, and styling."),
-                ("Seaborn", "High-level statistical plots, heatmaps, pairplots, violin plots, boxplots, distribution analysis, and aesthetics."),
-                ("Exploratory Data Analysis", "Univariate, bivariate, and multivariate visualization techniques to uncover patterns and anomalies."),
-                ("Charts and Graphs", "Selecting the right visualization for categorical, numerical, and time-series variables."),
-                ("Data Interpretation", "Formulating data-driven conclusions, reporting findings, and avoiding deceptive graphical representations.")
+            'id': 3,
+            'module_number': 'Module III',
+            'title': 'Module III – Data Visualization',
+            'description': 'Principles of graphical data representation, visual analytics using Matplotlib and Seaborn, exploratory data analysis (EDA), and data interpretation.',
+            'subtopics': [
+                ('Matplotlib', 'Figure architecture, line plots, scatter charts, bar graphs, histograms, customizing axes, legends, and styling.'),
+                ('Seaborn', 'High-level statistical plots, heatmaps, pairplots, violin plots, boxplots, distribution analysis, and aesthetics.'),
+                ('Exploratory Data Analysis', 'Univariate, bivariate, and multivariate visualization techniques to uncover patterns and anomalies.'),
+                ('Charts and Graphs', 'Selecting the right visualization for categorical, numerical, and time-series variables.'),
+                ('Data Interpretation', 'Formulating data-driven conclusions, reporting findings, and avoiding deceptive graphical representations.')
             ]
         },
         {
-            "id": 4,
-            "module_number": "Module IV",
-            "title": "Module IV – Statistics and Machine Learning",
-            "description": "Inferential and descriptive statistics, probability theory, correlation, regression models, supervised classification, and unsupervised clustering.",
-            "subtopics": [
-                ("Descriptive Statistics", "Measures of central tendency (mean, median, mode), spread (variance, standard deviation, IQR), and skewness."),
-                ("Probability", "Probability axioms, conditional probability, Bayes theorem, normal distribution, and Central Limit Theorem."),
-                ("Correlation and Regression", "Pearson and Spearman correlation, Ordinary Least Squares simple and multiple linear regression models."),
-                ("Supervised Learning", "Classification algorithms: Logistic Regression, k-Nearest Neighbors (KNN), and Naive Bayes."),
-                ("Unsupervised Learning", "Clustering methods: K-Means, hierarchical clustering, and Principal Component Analysis (PCA).")
+            'id': 4,
+            'module_number': 'Module IV',
+            'title': 'Module IV – Statistics and Machine Learning',
+            'description': 'Inferential and descriptive statistics, probability theory, correlation, regression models, supervised classification, and unsupervised clustering.',
+            'subtopics': [
+                ('Descriptive Statistics', 'Measures of central tendency (mean, median, mode), spread (variance, standard deviation, IQR), and skewness.'),
+                ('Probability', 'Probability axioms, conditional probability, Bayes theorem, normal distribution, and Central Limit Theorem.'),
+                ('Correlation and Regression', 'Pearson and Spearman correlation, Ordinary Least Squares simple and multiple linear regression models.'),
+                ('Supervised Learning', 'Classification algorithms: Logistic Regression, k-Nearest Neighbors (KNN), and Naive Bayes.'),
+                ('Unsupervised Learning', 'Clustering methods: K-Means, hierarchical clustering, and Principal Component Analysis (PCA).')
             ]
         },
         {
-            "id": 5,
-            "module_number": "Module V",
-            "title": "Module V – Advanced Data Science",
-            "description": "Model evaluation metrics, decision trees, ensemble learning techniques, feature engineering strategies, and neural networks / deep learning foundations.",
-            "subtopics": [
-                ("Model Evaluation", "Confusion matrix, precision, recall, F1-score, ROC-AUC curve, k-fold cross-validation, and bias-variance tradeoff."),
-                ("Decision Trees", "Information gain, entropy, Gini impurity, splitting criteria, pruning, and CART algorithms."),
-                ("Ensemble Learning", "Bagging with Random Forest, Boosting algorithms (AdaBoost, Gradient Boost, XGBoost), and voting classifiers."),
-                ("Feature Engineering", "Feature selection, polynomial feature generation, interaction terms, and dimensionality reduction."),
-                ("Introduction to Deep Learning", "Biological vs artificial neurons, multilayer perceptrons, activation functions, and backpropagation foundations.")
+            'id': 5,
+            'module_number': 'Module V',
+            'title': 'Module V – Advanced Data Science',
+            'description': 'Model evaluation metrics, decision trees, ensemble learning techniques, feature engineering strategies, and neural networks / deep learning foundations.',
+            'subtopics': [
+                ('Model Evaluation', 'Confusion matrix, precision, recall, F1-score, ROC-AUC curve, k-fold cross-validation, and bias-variance tradeoff.'),
+                ('Decision Trees', 'Information gain, entropy, Gini impurity, splitting criteria, pruning, and CART algorithms.'),
+                ('Ensemble Learning', 'Bagging with Random Forest, Boosting algorithms (AdaBoost, Gradient Boost, XGBoost), and voting classifiers.'),
+                ('Feature Engineering', 'Feature selection, polynomial feature generation, interaction terms, and dimensionality reduction.'),
+                ('Introduction to Deep Learning', 'Biological vs artificial neurons, multilayer perceptrons, activation functions, and backpropagation foundations.')
             ]
         }
     ]
 
-    for mod in modules_spec:
-        existing_mod = query_db("SELECT id FROM modules WHERE id = %s", (mod['id'],), fetch='one')
-        if not existing_mod:
-            query_db("""
-            INSERT INTO modules (id, module_number, title, description)
-            VALUES (%s, %s, %s, %s)
-            """, (mod['id'], mod['module_number'], mod['title'], mod['description']), commit=True)
-        else:
-            query_db("""
-            UPDATE modules SET module_number = %s, title = %s, description = %s WHERE id = %s
-            """, (mod['module_number'], mod['title'], mod['description'], mod['id']), commit=True)
-
-        # Check subtopics
-        for idx, (sub_title, sub_desc) in enumerate(mod['subtopics'], start=1):
-            existing_sub = query_db(
-                "SELECT id FROM subtopics WHERE module_id = %s AND title = %s",
-                (mod['id'], sub_title), fetch='one'
+    for mod in module_specs:
+        module_row = query_db('SELECT id FROM modules WHERE id = %s', (mod['id'],), fetch='one')
+        if not module_row:
+            query_db(
+                'INSERT INTO modules (id, module_number, title, description) VALUES (%s, %s, %s, %s)',
+                (mod['id'], mod['module_number'], mod['title'], mod['description']),
+                commit=True,
             )
-            if not existing_sub:
-                sub_id = query_db("""
-                INSERT INTO subtopics (module_id, title, description, display_order)
-                VALUES (%s, %s, %s, %s)
-                """, (mod['id'], sub_title, sub_desc, idx), commit=True)
-            else:
-                sub_id = existing_sub['id']
+        else:
+            query_db(
+                'UPDATE modules SET module_number = %s, title = %s, description = %s WHERE id = %s',
+                (mod['module_number'], mod['title'], mod['description'], mod['id']),
+                commit=True,
+            )
 
-            # Ensure valid PDF exists for this subtopic
-            existing_pdf = query_db("SELECT id, file_path FROM pdf_resources WHERE subtopic_id = %s", (sub_id,), fetch='one')
-            
-            # Format folder and file
-            mod_folder = f"module_{mod['id']}"
-            safe_filename = f"{sub_title.lower().replace(' ', '_').replace('/', '_')}.pdf"
-            rel_path = f"uploads/modules/{mod_folder}/{safe_filename}"
-            abs_path = os.path.join(BASE_DIR, rel_path)
-
-            if not os.path.exists(abs_path) or not existing_pdf:
-                # Generate sample PDF
-                points = [
-                    f"Understanding {sub_title} in modern Data Science workflows.",
-                    f"Detailed breakdown: {sub_desc}",
-                    "Mathematical formulas, code examples, and laboratory execution guidelines.",
-                    "Common pitfalls, edge cases, and best practices in practical applications."
-                ]
-                generate_sample_pdf(
-                    abs_path,
-                    "DATA SCIENCE LABORATORY MANUAL",
-                    mod['title'],
-                    sub_title,
-                    sub_desc,
-                    points
+        for order_index, (subtopic_title, subtopic_desc) in enumerate(mod['subtopics'], start=1):
+            subtopic = query_db(
+                'SELECT id FROM subtopics WHERE module_id = %s AND title = %s',
+                (mod['id'], subtopic_title),
+                fetch='one',
+            )
+            if not subtopic:
+                subtopic_id = query_db(
+                    'INSERT INTO subtopics (module_id, title, description, display_order) VALUES (%s, %s, %s, %s)',
+                    (mod['id'], subtopic_title, subtopic_desc, order_index),
+                    commit=True,
                 )
-                
-                if not existing_pdf:
-                    query_db("""
-                    INSERT INTO pdf_resources (subtopic_id, file_name, file_path)
-                    VALUES (%s, %s, %s)
-                    """, (sub_id, safe_filename, rel_path), commit=True)
+            else:
+                subtopic_id = subtopic['id']
+                query_db(
+                    'UPDATE subtopics SET description = %s, display_order = %s WHERE id = %s',
+                    (subtopic_desc, order_index, subtopic_id),
+                    commit=True,
+                )
 
-    # 4. Sample Experiment 1
-    sample_code_path = os.path.join(BASE_DIR, 'uploads', 'experiments', 'code', 'housing_eda_execution.py')
-    code_text = ""
-    if os.path.exists(sample_code_path):
-        with open(sample_code_path, 'r', encoding='utf-8') as f:
-            code_text = f.read()
+            pdf_present = query_db('SELECT id FROM pdf_resources WHERE subtopic_id = %s', (subtopic_id,), fetch='one')
+            if not pdf_present:
+                slug = subtopic_title.lower().replace(' & ', 'and').replace(' ', '_')
+                file_name = f'{slug}.pdf'
+                folder = os.path.join(BASE_DIR, 'uploads', 'modules', f'module_{mod["id"]}')
+                os.makedirs(folder, exist_ok=True)
+                file_path = os.path.join(folder, file_name)
+                generate_sample_pdf(
+                    file_path,
+                    subtopic_title,
+                    mod['title'],
+                    subtopic_title,
+                    subtopic_desc,
+                    [subtopic_desc, 'Apply the concept to a real dataset', 'Document the outcome and explain the result']
+                )
+                query_db(
+                    'INSERT INTO pdf_resources (subtopic_id, file_name, file_path) VALUES (%s, %s, %s)',
+                    (subtopic_id, file_name, os.path.join('uploads', 'modules', f'module_{mod["id"]}', file_name)),
+                    commit=True,
+                )
 
-    sample_output_text = """[STEP 1] Loading California Housing Dataset...
-Dataset Dimensions: (20640, 10)
-
-First 5 Records:
-   longitude  latitude  housing_median_age  total_rooms  total_bedrooms  population  households  median_income  median_house_value
-0    -122.23     37.88                41.0        880.0           129.0       322.0       126.0         8.3252            452600.0
-1    -122.22     37.86                21.0       7099.0          1106.0      2401.0      1138.0         8.3014            358500.0
-2    -122.24     37.85                52.0       1467.0           190.0       496.0       177.0         7.2574            352100.0
-
-[STEP 2] Checking Missing Values:
-total_bedrooms: 207 null rows detected.
--> Imputed missing total_bedrooms with median: 435.0
-
-[STEP 3] Summary Statistics of Numerical Features:
-                     mean          std         min          50%          max
-median_income      3.8706       1.8998      0.4999       3.5348      15.0001
-median_house_value 206855.8    115395.6    14999.0     179700.0     500001.0
-
-[STEP 4] Correlation with Median House Value:
-median_house_value    1.000000
-median_income         0.688075
-total_rooms           0.134153
-housing_median_age    0.105623
-households            0.065843
-total_bedrooms        0.049686
-population           -0.024650
-longitude            -0.045967
-latitude             -0.144160
-
-[STEP 5] Generating Seaborn Correlation Heatmap...
--> Plot saved to output_heatmap.png
-[COMPLETED] Experiment 1 executed successfully with exit code 0."""
-
-    existing_exp = query_db("SELECT id, code_content FROM experiments WHERE id = 1", fetch='one')
+    existing_exp = query_db("SELECT id FROM experiments WHERE experiment_no = %s", ('1',), fetch='one')
     if not existing_exp:
-        query_db("""
-        INSERT INTO experiments (id, experiment_no, title, short_description, cover_image, d2_heading, long_content, code_file_name, code_file_path, code_content, output_image, output_text, github_url)
-        VALUES (1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-            '1',
-            'Exploratory Data Analysis on Housing Price Dataset',
-            'Perform data cleaning, missing value imputation, statistical analysis, and correlation heatmaps on a real-world real estate dataset.',
-            '/static/images/exp1_cover.svg',
-            'Experiment 1: Methodology and Code Execution',
-            """## Objective
-To inspect, clean, and visualize the California Housing dataset to identify key features determining median house values.
-
-## Key Steps Executed
-1. **Data Ingestion**: Loaded California Housing CSV dataset using pandas.read_csv().
-2. **Missing Value Analysis**: Inspected columns with missing total_bedrooms; applied median imputation.
-3. **Distribution Analysis**: Computed mean, variance, and generated distribution histograms.
-4. **Correlation Matrix**: Constructed Pearson correlation heatmap using seaborn; confirmed median_income is strongly correlated (+0.68) with median_house_value.
-
-## Conclusion
-Exploratory data analysis revealed strong positive linear dependency between household income and property valuation. Log transformation was applied to long-tailed features for model preparation.""",
-            'housing_eda_execution.py',
-            'uploads/experiments/code/housing_eda_execution.py',
-            code_text,
-            '/static/images/exp1_cover.svg',
-            sample_output_text,
-            'https://github.com/lohithgoud/ds-laboratory/tree/main/exp1'
-        ), commit=True)
-    else:
-        # Update existing experiment with sample code and output if empty
-        if not existing_exp.get('code_content'):
-            query_db("""
-            UPDATE experiments SET 
-                code_file_name = %s,
-                code_file_path = %s,
-                code_content = %s,
-                output_image = %s,
-                output_text = %s
-            WHERE id = 1
-            """, (
-                'housing_eda_execution.py',
-                'uploads/experiments/code/housing_eda_execution.py',
-                code_text,
+        query_db(
+            '''
+            INSERT INTO experiments (
+                experiment_no, title, short_description, cover_image, d2_heading, long_content,
+                code_file_name, code_file_path, code_content, output_image, output_text, github_url
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ''',
+            (
+                '1',
+                'Exploratory Data Analysis on Housing Price Dataset',
+                'Perform data cleaning, missing value imputation, statistical analysis, and correlation heatmaps on a real-world real estate dataset.',
                 '/static/images/exp1_cover.svg',
-                sample_output_text
-            ), commit=True)
+                'Exploratory Data Analysis & Housing Insights',
+                '## Overview\nAnalyzed a real estate dataset to uncover distribution, feature relationships, and key pricing drivers.\n\n## Methodology\n- Cleaned missing values\n- Analyzed categorical and numeric patterns\n- Visualized correlation heatmap and price trends\n\n## Findings\nMedian price was strongly associated with location, total area, and number of bedrooms.',
+                'eda_housing.py',
+                'uploads/experiments/code/eda_housing.py',
+                'import pandas as pd\nimport seaborn as sns\n\n# Load and inspect the housing dataset\ndf = pd.read_csv("housing.csv")\nprint(df.head())\nprint(df.describe())\n',
+                '/static/images/exp1_cover.svg',
+                'Model performance summary: cleaned data, effective inspection of price trends and correlations.',
+                'https://github.com/lohitkumar/ds-laboratory/tree/main/exp1',
+            ),
+            commit=True,
+        )
 
-        # Seed sub-experiments 1A and 1B
-        query_db("""
-        INSERT INTO sub_experiments (experiment_id, letter, title, short_description, d2_heading, long_content, cover_image, completed)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-            1,
-            'A',
-            'Data Cleaning & Imputation',
-            'Handling missing attributes and detecting numerical outliers in housing data.',
-            'Sub-Experiment 1A: Data Cleaning Pipeline',
-            'Detailed data cleaning steps: checking df.isna().sum(), imputing missing values with SimpleImputer(strategy="median"), and clipping extreme values.',
-            '/static/images/exp1_cover.svg',
-            1
-        ), commit=True)
+    experiment = query_db("SELECT id FROM experiments WHERE experiment_no = %s", ('1',), fetch='one')
+    if experiment:
+        sub_rows = query_db('SELECT id FROM sub_experiments WHERE experiment_id = %s', (experiment['id'],), fetch='all')
+        if not sub_rows:
+            query_db(
+                'INSERT INTO sub_experiments (experiment_id, letter, title, short_description, d2_heading, long_content, cover_image) VALUES (%s, %s, %s, %s, %s, %s, %s)',
+                (experiment['id'], 'A', 'Dataset inspection', 'Inspect structure, missing values, and overview statistics.', 'Data Cleaning Overview', 'Observed several missing values in the feature set and removed inconsistent entries.', '/static/images/exp1_cover.svg'),
+                commit=True,
+            )
+            query_db(
+                'INSERT INTO sub_experiments (experiment_id, letter, title, short_description, d2_heading, long_content, cover_image) VALUES (%s, %s, %s, %s, %s, %s, %s)',
+                (experiment['id'], 'B', 'Correlation analysis', 'Analyze relationships between area, rooms, and target price.', 'Feature Relationship Study', 'The strongest positive correlation was found between living area and sale price.', '/static/images/exp1_cover.svg'),
+                commit=True,
+            )
 
-        query_db("""
-        INSERT INTO sub_experiments (experiment_id, letter, title, short_description, d2_heading, long_content, cover_image, completed)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-            1,
-            'B',
-            'Correlation Heatmap & Feature Selection',
-            'Visualizing feature relationships using Seaborn heatmap and pairplot.',
-            'Sub-Experiment 1B: Correlation Analysis',
-            'Generated heatmap with sns.heatmap(df.corr(), annot=True, cmap="coolwarm") to evaluate multi-collinearity among housing attributes.',
-            '/static/images/exp1_cover.svg',
-            1
-        ), commit=True)
+    try:
+        query_db('CREATE INDEX IF NOT EXISTS idx_modules_title ON modules(title)', commit=True)
+        query_db('CREATE INDEX IF NOT EXISTS idx_subtopics_module_id ON subtopics(module_id)', commit=True)
+        query_db('CREATE INDEX IF NOT EXISTS idx_experiments_no ON experiments(experiment_no)', commit=True)
+    except Exception:
+        pass
 
-    print("[Database Ready] Schema and initial data verified successfully.")
 
 if __name__ == '__main__':
     init_db()
